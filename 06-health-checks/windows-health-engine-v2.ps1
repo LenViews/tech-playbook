@@ -9,7 +9,7 @@ $computerInfo = Get-ComputerInfo
 $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
 $baseboard = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue
 
-$system = [PSCustomObject]@{
+$systemRaw = [PSCustomObject]@{
     ComputerName   = $Computer
     Manufacturer   = $computerInfo.CsManufacturer
     Model          = $computerInfo.CsModel
@@ -20,6 +20,7 @@ $system = [PSCustomObject]@{
     BIOSVersion    = $bios.SMBIOSBIOSVersion
     BIOSDate       = $bios.ReleaseDate
     Motherboard    = $baseboard.Product
+    Uptime_Days    = [math]::Round(((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalDays, 1)
 }
 
 # ================================
@@ -29,7 +30,7 @@ $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue
 $ram = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
 $gpu = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
 
-$hardware = [PSCustomObject]@{
+$hardwareRaw = [PSCustomObject]@{
     CPU               = ($cpu.Name -replace '\s+', ' ').Trim()
     Cores             = $cpu.NumberOfCores
     LogicalProcessors = $cpu.NumberOfLogicalProcessors
@@ -40,10 +41,10 @@ $hardware = [PSCustomObject]@{
 # ================================
 # STORAGE (Physical disks + Volumes)
 # ================================
-$storage = Get-PhysicalDisk -ErrorAction SilentlyContinue |
+$storageRaw = Get-PhysicalDisk -ErrorAction SilentlyContinue |
     Select-Object FriendlyName, MediaType, Size, HealthStatus
 
-$volumes = Get-Volume -ErrorAction SilentlyContinue |
+$volumesRaw = Get-Volume -ErrorAction SilentlyContinue |
     Select-Object DriveLetter,
         FileSystemLabel,
         FileSystem,
@@ -58,7 +59,7 @@ $tpm = Get-Tpm -ErrorAction SilentlyContinue
 $secureBoot = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue
 $defender = Get-MpComputerStatus -ErrorAction SilentlyContinue
 
-$security = [PSCustomObject]@{
+$securityRaw = [PSCustomObject]@{
     TPM_Present        = $tpm.TpmPresent
     TPM_Ready          = $tpm.TpmReady
     TPM_Version        = $tpm.SpecVersion
@@ -70,9 +71,9 @@ $security = [PSCustomObject]@{
 # ================================
 # NETWORK (Adapters + IP config)
 # ================================
-$networkAdapters = Get-NetAdapter -ErrorAction SilentlyContinue |
+$networkAdaptersRaw = Get-NetAdapter -ErrorAction SilentlyContinue |
     Select-Object Name, Status, MacAddress, LinkSpeed
-$ipConfig = Get-NetIPConfiguration -ErrorAction SilentlyContinue |
+$ipConfigRaw = Get-NetIPConfiguration -ErrorAction SilentlyContinue |
     Select-Object InterfaceAlias, IPv4Address, IPv6Address
 
 $internetReachable = (Test-NetConnection google.com -WarningAction SilentlyContinue).PingSucceeded
@@ -80,15 +81,15 @@ $internetReachable = (Test-NetConnection google.com -WarningAction SilentlyConti
 # ================================
 # USERS & ADMINISTRATORS
 # ================================
-$localUsers = Get-LocalUser -ErrorAction SilentlyContinue |
+$localUsersRaw = Get-LocalUser -ErrorAction SilentlyContinue |
     Select-Object Name, Enabled, LastLogon
-$localAdmins = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
+$localAdminsRaw = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
     Select-Object Name, ObjectClass
 
 # ================================
 # SOFTWARE (Installed applications)
 # ================================
-$software = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,
+$softwareRaw = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,
                            HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue |
     Where-Object { $_.DisplayName } |
     Select-Object DisplayName, DisplayVersion, Publisher, InstallDate -First 200
@@ -96,13 +97,13 @@ $software = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uni
 # ================================
 # STARTUP COMMANDS
 # ================================
-$startup = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue |
+$startupRaw = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue |
     Select-Object Name, Command, Location, User
 
 # ================================
 # WINDOWS UPDATES (last 20 hotfixes)
 # ================================
-$hotfix = Get-HotFix -ErrorAction SilentlyContinue |
+$hotfixRaw = Get-HotFix -ErrorAction SilentlyContinue |
     Sort-Object InstalledOn -Descending |
     Select-Object -First 20
 
@@ -110,7 +111,7 @@ $hotfix = Get-HotFix -ErrorAction SilentlyContinue |
 # MONITORS (WMI)
 # ================================
 $monitorsRaw = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue
-$monitors = foreach ($m in $monitorsRaw) {
+$monitorsDecoded = foreach ($m in $monitorsRaw) {
     [PSCustomObject]@{
         Manufacturer = if ($m.ManufacturerName) { [System.Text.Encoding]::ASCII.GetString($m.ManufacturerName -ne 0) -replace "`0", "" } else { $null }
         UserFriendlyName = if ($m.UserFriendlyName) { [System.Text.Encoding]::ASCII.GetString($m.UserFriendlyName -ne 0) -replace "`0", "" } else { $null }
@@ -121,13 +122,13 @@ $monitors = foreach ($m in $monitorsRaw) {
 # ================================
 # PROCESSES (Top CPU & Memory)
 # ================================
-$topCPU = Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, CPU, Id, WorkingSet
-$topMemory = Get-Process | Sort-Object WorkingSet -Descending | Select-Object -First 10 Name, WorkingSet, Id
+$topCPURaw = Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, CPU, Id, WorkingSet
+$topMemoryRaw = Get-Process | Sort-Object WorkingSet -Descending | Select-Object -First 10 Name, WorkingSet, Id
 
 # ================================
 # SERVICES (All + failed critical)
 # ================================
-$allServices = Get-Service | Select-Object Name, Status, StartType
+$allServicesRaw = Get-Service | Select-Object Name, Status, StartType
 
 $knownSafeServices = @(
     'dmwappushservice', 'edgeupdate', 'edgeupdatem', 'GoogleUpdaterInternalService*', 'GoogleUpdaterService*',
@@ -136,110 +137,186 @@ $knownSafeServices = @(
     'XblGameSave', 'XboxNetApiSvc', 'WMPNetworkSvc', 'RemoteRegistry', 'RemoteAccess'
 )
 
-$failedServicesRaw = $allServices | Where-Object { $_.Status -eq 'Stopped' -and $_.StartType -eq 'Automatic' }
-$failedCritical = $failedServicesRaw | Where-Object {
+$failedServicesRaw = $allServicesRaw | Where-Object { $_.Status -eq 'Stopped' -and $_.StartType -eq 'Automatic' }
+$failedCritical = @($failedServicesRaw | Where-Object {
     $name = $_.Name
     -not ($knownSafeServices | Where-Object { $name -like $_ })
-}
-$ignoredServices = $failedServicesRaw | Where-Object { $_.Name -like '*edgeupdate*' -or $_.Name -like '*GoogleUpdater*' -or $_.Name -like '*MapsBroker*' -or $_.Name -like '*WslInstaller*' }
+})
+$ignoredServices = @($failedServicesRaw | Where-Object { $_.Name -like '*edgeupdate*' -or $_.Name -like '*GoogleUpdater*' -or $_.Name -like '*MapsBroker*' -or $_.Name -like '*WslInstaller*' })
 
 # ================================
 # EVENT LOG (Critical/Errors in last 24h)
 # ================================
 $lastDay = (Get-Date).AddDays(-1)
-$criticalEvents = Get-WinEvent -LogName System -MaxEvents 200 -ErrorAction SilentlyContinue |
+$criticalEventsRaw = Get-WinEvent -LogName System -MaxEvents 200 -ErrorAction SilentlyContinue |
     Where-Object { $_.LevelDisplayName -in @('Critical', 'Error') -and $_.TimeCreated -gt $lastDay } |
     Select-Object TimeCreated, Id, ProviderName, Message
-$criticalEventCount = ($criticalEvents | Measure-Object).Count
+$criticalEventsArray = @($criticalEventsRaw)
 
 # ================================
-# SCHEDULED TASKS (sample)
+# SCHEDULED TASKS (all)
 # ================================
-$scheduledTasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
+$scheduledTasksRaw = Get-ScheduledTask -ErrorAction SilentlyContinue |
     Select-Object TaskName, State
 
 # ================================
 # STORAGE HEALTH (for scoring - ignore system partitions)
 # ================================
-$userVolumes = $volumes | Where-Object { $_.DriveLetter -ne $null -and $_.SizeGB -gt 10 }
-$lowDiskDrives = $userVolumes | Where-Object { $_.FreePercent -lt 10 }
+$userVolumes = $volumesRaw | Where-Object { $_.DriveLetter -ne $null -and $_.SizeGB -gt 10 }
+$lowDiskDrives = @($userVolumes | Where-Object { $_.FreePercent -lt 10 })
 
 # ================================
-# HEALTH SCORING ENGINE (refined)
+# PER-CATEGORY SCORING (start at 100, deduct only)
 # ================================
-$score = 100
 
-# 1. Critical services failed
-if ($failedCritical.Count -gt 10) { $score -= 30 }
-elseif ($failedCritical.Count -gt 5) { $score -= 20 }
-elseif ($failedCritical.Count -gt 0) { $score -= 10 }
+# --- System Score (BIOS age, uptime, missing info) ---
+$systemScore = 100
+if ($systemRaw.Uptime_Days -gt 30) { $systemScore -= 10 }
+if ($systemRaw.Uptime_Days -gt 90) { $systemScore -= 15 }
+if ([string]::IsNullOrWhiteSpace($systemRaw.SerialNumber)) { $systemScore -= 15 }
+if ([string]::IsNullOrWhiteSpace($systemRaw.BIOSVersion)) { $systemScore -= 10 }
+$systemScore = [math]::Max(0, $systemScore)
 
-# 2. Critical system errors last 24h
-if ($criticalEventCount -gt 20) { $score -= 30 }
-elseif ($criticalEventCount -gt 10) { $score -= 20 }
-elseif ($criticalEventCount -gt 2) { $score -= 10 }
-elseif ($criticalEventCount -gt 0) { $score -= 5 }
+# --- Hardware Score (no hardware faults detected) ---
+$hardwareScore = 100
+if (-not $cpu.Name) { $hardwareScore -= 30 }
+if ($hardwareRaw.RAM_GB -lt 4) { $hardwareScore -= 25 }
+# If no GPU detected (integrated is fine), penalty only if truly missing
+if (-not $hardwareRaw.GPU) { $hardwareScore -= 15 }
+$hardwareScore = [math]::Max(0, $hardwareScore)
 
-# 3. Low disk space on user drives
-$lowDiskCount = ($lowDiskDrives | Measure-Object).Count
-if ($lowDiskCount -gt 1) { $score -= 20 }
-elseif ($lowDiskCount -eq 1) { $score -= 10 }
+# --- Storage Score (physical disk health, low space) ---
+$storageScore = 100
+$unhealthyDisks = @($storageRaw | Where-Object { $_.HealthStatus -ne 'Healthy' })
+if ($unhealthyDisks.Count -gt 0) { $storageScore -= 40 }
+$lowDiskCount = $lowDiskDrives.Count
+if ($lowDiskCount -gt 1) { $storageScore -= 20 }
+elseif ($lowDiskCount -eq 1) { $storageScore -= 10 }
+$storageScore = [math]::Max(0, $storageScore)
 
-# 4. Internet connectivity
-if (-not $internetReachable) { $score -= 15 }
+# --- Security Score (missing key features = penalty) ---
+$securityScore = 100
+if ($securityRaw.TPM_Present -ne $true) { $securityScore -= 25 }
+if ($securityRaw.SecureBoot -ne $true) { $securityScore -= 25 }
+if ($securityRaw.DefenderEnabled -ne $true) { $securityScore -= 25 }
+if ($securityRaw.RealTimeProtection -ne $true) { $securityScore -= 25 }
+$securityScore = [math]::Max(0, $securityScore)
 
-# 5. Security bonuses
-if ($security.TPM_Present -eq $true) { $score = [math]::Min(100, $score + 5) }
-if ($security.SecureBoot -eq $true) { $score = [math]::Min(100, $score + 5) }
-if ($security.DefenderEnabled -eq $true -and $security.RealTimeProtection -eq $true) { $score = [math]::Min(100, $score + 10) }
+# --- Network Score (internet, DNS, adapter issues) ---
+$networkScore = 100
+if (-not $internetReachable) { $networkScore -= 50 }
+$downAdapters = @($networkAdaptersRaw | Where-Object { $_.Status -eq 'Disconnected' -and $_.Name -notlike '*Bluetooth*' })
+if ($downAdapters.Count -gt 0) { $networkScore -= 15 }
+$networkScore = [math]::Max(0, $networkScore)
 
-$score = [math]::Max(0, [math]::Min(100, $score))
+# --- Stability Score (services, events, tasks, processes) ---
+$stabilityScore = 100
+# Critical services
+$fc = $failedCritical.Count
+if ($fc -gt 10) { $stabilityScore -= 30 }
+elseif ($fc -gt 5) { $stabilityScore -= 20 }
+elseif ($fc -gt 0) { $stabilityScore -= 15 }
+# Critical events in last 24h
+$ce = $criticalEventsArray.Count
+if ($ce -gt 20) { $stabilityScore -= 30 }
+elseif ($ce -gt 10) { $stabilityScore -= 20 }
+elseif ($ce -gt 2) { $stabilityScore -= 15 }
+elseif ($ce -gt 0) { $stabilityScore -= 10 }
+# High memory/CPU usage (top process > 80% CPU average over time – we approximate by high CPU time > 500 seconds as warning)
+$highCpuProcesses = @($topCPURaw | Where-Object { $_.CPU -gt 500 -and $_.Name -ne 'Idle' -and $_.Name -ne 'System' })
+if ($highCpuProcesses.Count -gt 0) { $stabilityScore -= 10 }
+$stabilityScore = [math]::Max(0, $stabilityScore)
+
+# --- Software Score (presence of known risky or outdated software) ---
+$softwareScore = 100
+# Simple heuristic: if any software with "Preview", "Beta", "Alpha" in name (optional)
+$previewSoftware = @($softwareRaw | Where-Object { $_.DisplayName -match 'Preview|Beta|Alpha' })
+if ($previewSoftware.Count -gt 5) { $softwareScore -= 10 }
+$softwareScore = [math]::Max(0, $softwareScore)
 
 # ================================
-# SUMMARY (includes health score and audit highlights)
+# OVERALL WEIGHTED SCORE
 # ================================
-$summary = [PSCustomObject]@{
-    ComputerName            = $Computer
-    HealthScore             = $score
-    TopCPUProcess           = ($topCPU | Select-Object -First 1).Name
-    TopMemoryProcess        = ($topMemory | Select-Object -First 1).Name
-    FailedCriticalServices  = $failedCritical.Count
-    IgnoredSafeServices     = $ignoredServices.Count
-    CriticalEventErrors_24h = $criticalEventCount
-    LowDiskWarnings         = $lowDiskCount
-    InternetReachable       = $internetReachable
-    LastPatch               = ($hotfix | Select-Object -First 1).HotFixID
-    StorageCount            = ($storage | Measure-Object).Count
-    TPM                     = $security.TPM_Present
-    SecureBoot              = $security.SecureBoot
+$weights = @{
+    Security  = 0.25
+    Stability = 0.20
+    Storage   = 0.15
+    Hardware  = 0.15
+    Network   = 0.10
+    System    = 0.10
+    Software  = 0.05
+}
+
+$overallScore = [math]::Round(
+    ($systemScore * $weights.System) +
+    ($hardwareScore * $weights.Hardware) +
+    ($storageScore * $weights.Storage) +
+    ($securityScore * $weights.Security) +
+    ($networkScore * $weights.Network) +
+    ($stabilityScore * $weights.Stability) +
+    ($softwareScore * $weights.Software)
+)
+
+# ================================
+# CATEGORY SCORES OBJECT
+# ================================
+$categoryScores = [PSCustomObject]@{
+    System    = $systemScore
+    Hardware  = $hardwareScore
+    Storage   = $storageScore
+    Security  = $securityScore
+    Network   = $networkScore
+    Stability = $stabilityScore
+    Software  = $softwareScore
 }
 
 # ================================
-# FINAL JSON REPORT (all audit data + health)
+# SUMMARY (includes overall and category scores)
+# ================================
+$summary = [PSCustomObject]@{
+    ComputerName            = $Computer
+    OverallScore            = $overallScore
+    CategoryScores          = $categoryScores
+    TopCPUProcess           = ($topCPURaw | Select-Object -First 1).Name
+    TopMemoryProcess        = ($topMemoryRaw | Select-Object -First 1).Name
+    FailedCriticalServices  = $failedCritical.Count
+    IgnoredSafeServices     = $ignoredServices.Count
+    CriticalEventErrors_24h = $criticalEventsArray.Count
+    LowDiskWarnings         = $lowDiskCount
+    InternetReachable       = $internetReachable
+    LastPatch               = ($hotfixRaw | Select-Object -First 1).HotFixID
+    StorageCount            = ($storageRaw | Measure-Object).Count
+    TPM                     = $securityRaw.TPM_Present
+    SecureBoot              = $securityRaw.SecureBoot
+}
+
+# ================================
+# FINAL JSON REPORT (full raw data + scores)
 # ================================
 $report = [PSCustomObject]@{
     GeneratedAt      = (Get-Date).ToString("s")
-    System           = $system
-    Hardware         = $hardware
-    Storage          = $storage
-    Volumes          = $volumes
-    Security         = $security
-    Network          = $networkAdapters
-    IPConfig         = $ipConfig
-    Users            = $localUsers
-    Admins           = $localAdmins
-    Software         = $software
-    Startup          = $startup
-    Updates          = $hotfix
-    Monitors         = $monitors
+    System           = $systemRaw
+    Hardware         = $hardwareRaw
+    Storage          = $storageRaw
+    Volumes          = $volumesRaw
+    Security         = $securityRaw
+    Network          = $networkAdaptersRaw
+    IPConfig         = $ipConfigRaw
+    Users            = $localUsersRaw
+    Admins           = $localAdminsRaw
+    Software         = $softwareRaw
+    Startup          = $startupRaw
+    Updates          = $hotfixRaw
+    Monitors         = $monitorsDecoded
     Processes        = @{
-        TopCPU      = $topCPU
-        TopMemory   = $topMemory
+        TopCPU      = $topCPURaw
+        TopMemory   = $topMemoryRaw
     }
-    Services         = $allServices
+    Services         = $allServicesRaw
     FailedCriticalServices = $failedCritical
-    CriticalEvents   = $criticalEvents
-    ScheduledTasks   = $scheduledTasks
+    CriticalEvents   = $criticalEventsArray
+    ScheduledTasks   = $scheduledTasksRaw
+    CategoryScores   = $categoryScores
     Summary          = $summary
 }
 
@@ -248,6 +325,14 @@ $report = [PSCustomObject]@{
 # ================================
 $report | ConvertTo-Json -Depth 6 | Out-File -Encoding UTF8 $Path
 
-Write-Host "`nAudit & Health Engine complete!"
-Write-Host "Health score: $score / 100"
-Write-Host "File saved to: $Path"
+Write-Host "`nAudit & Health Engine v3.2 complete!"
+Write-Host "Overall health score: $overallScore / 100"
+Write-Host "Category scores:"
+Write-Host "  System:    $systemScore"
+Write-Host "  Hardware:  $hardwareScore"
+Write-Host "  Storage:   $storageScore"
+Write-Host "  Security:  $securityScore"
+Write-Host "  Network:   $networkScore"
+Write-Host "  Stability: $stabilityScore"
+Write-Host "  Software:  $softwareScore"
+Write-Host "`nFile saved to: $Path"
