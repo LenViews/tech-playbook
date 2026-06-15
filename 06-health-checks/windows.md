@@ -1,12 +1,3 @@
-# Enterprise Device Audit Report
-> JSON Export via PowerShell (NO modules required)
-
-## Overview
-This PowerShell script generates a comprehensive enterprise device audit report in JSON format, collecting system, hardware, security, and software information without requiring any external modules. Perfect for programmatic processing and integration with other tools.
-
-## Usage
-
-```powershell
 $Date = Get-Date -Format "yyyyMMdd_HHmmss"
 $Computer = $env:COMPUTERNAME
 $Path = "$env:USERPROFILE\Desktop\IT_Audit_$Computer`_$Date.json"
@@ -152,40 +143,3 @@ $report | ConvertTo-Json -Depth 5 | Out-File -Encoding UTF8 $Path
 Write-Host "`nAudit complete!"
 Write-Host "JSON saved to:"
 Write-Host $Path
-```
-
-## JSON Output Structure
-
-The script generates a JSON file with the following top-level sections:
-
-| Section | Contents |
-|---------|----------|
-| **GeneratedAt** | ISO 8601 timestamp of report generation |
-| **System** | BIOS, OS, and motherboard information |
-| **Hardware** | CPU, cores, RAM, and GPU specs |
-| **Storage** | Physical disk details and health status |
-| **Volumes** | Drive letters, filesystem, capacity, and free space |
-| **Security** | TPM, SecureBoot, and Defender status |
-| **Network** | Network adapters and connectivity status |
-| **IPConfig** | IPv4 and IPv6 addresses by interface |
-| **Users** | Local user accounts and logon info |
-| **Admins** | Administrator group membership |
-| **Software** | Installed applications (limited to first 200 for safety) |
-| **Startup** | Startup programs and commands |
-| **Updates** | Last 20 installed Windows hotfixes |
-| **Monitors** | Connected monitors and serial numbers |
-| **Summary** | Quick overview of key system details |
-
-## Benefits
-
-✅ **No Excel Required** - Outputs to JSON for broader compatibility  
-✅ **Programmatic Processing** - Easy to parse and integrate with other tools  
-✅ **Safe Software Enumeration** - Limited to first 200 entries to avoid performance issues  
-✅ **ISO 8601 Timestamps** - Machine-readable date format  
-✅ **UTF-8 Encoding** - Universal character support  
-
-## Requirements
-
-- Windows 10/11 or Windows Server 2016+
-- Administrator privileges
-- PowerShell 5.0+
