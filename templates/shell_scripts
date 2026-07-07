@@ -1,0 +1,11 @@
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass # Allow scripts for the current PowerShell session
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned # Allow local scripts for your user account
+
+Unblock-File .\AuditHealth.ps1 # downloaded script from the internet,
+
+  ## Run the script without changing the policy permanently
+  powershell -ExecutionPolicy Bypass -File .\AuditHealth.ps1
+  pwsh -ExecutionPolicy Bypass -File .\AuditHealth.ps1 #powershell7
+
+# Check your current policy
+Get-ExecutionPolicy -List
