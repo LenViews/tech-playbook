@@ -18,7 +18,17 @@ $system = [PSCustomObject]@{
     Architecture   = $computerInfo.OsArchitecture
     SerialNumber   = $bios.SerialNumber
     BIOSVersion    = $bios.SMBIOSBIOSVersion
-    BIOSDate       = $bios.ReleaseDate
+    BIOSDate = if ($bios.ReleaseDate) {
+        try {
+            (Get-Date $bios.ReleaseDate).ToString("yyyy-MM-dd")
+        }
+        catch {
+            $bios.ReleaseDate.ToString()
+        }
+    }
+    else {
+        $null
+    }
     Motherboard    = $baseboard.Product
 }
 
@@ -41,7 +51,14 @@ $hardware = [PSCustomObject]@{
 # STORAGE (Physical disks + Volumes)
 # ================================
 $storage = Get-PhysicalDisk -ErrorAction SilentlyContinue |
-    Select-Object FriendlyName, MediaType, Size, HealthStatus
+ForEach-Object {
+    [PSCustomObject]@{
+        FriendlyName = $_.FriendlyName
+        MediaType    = $_.MediaType.ToString()
+        SizeGB       = [math]::Round($_.Size / 1GB, 2)
+        HealthStatus = $_.HealthStatus.ToString()
+    }
+}
 
 $volumes = Get-Volume -ErrorAction SilentlyContinue |
     Select-Object DriveLetter,
@@ -55,7 +72,12 @@ $volumes = Get-Volume -ErrorAction SilentlyContinue |
 # SECURITY (TPM, SecureBoot, Defender)
 # ================================
 $tpm = Get-Tpm -ErrorAction SilentlyContinue
-$secureBoot = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue
+try {
+    $secureBoot = Confirm-SecureBootUEFI -ErrorAction Stop
+}
+catch {
+    $secureBoot = $null
+}
 $defender = Get-MpComputerStatus -ErrorAction SilentlyContinue
 
 $security = [PSCustomObject]@{
@@ -70,10 +92,26 @@ $security = [PSCustomObject]@{
 # ================================
 # NETWORK (Adapters + IP config)
 # ================================
-$networkAdapters = Get-NetAdapter -ErrorAction SilentlyContinue |
-    Select-Object Name, Status, MacAddress, LinkSpeed
+$networkAdapters = Get-NetAdapter |
+ForEach-Object {
+    [PSCustomObject]@{
+        Name = $_.Name
+        Status = $_.Status.ToString()
+        MacAddress = $_.MacAddress
+        LinkSpeed = $_.LinkSpeed.ToString()
+    }
+}
 $ipConfig = Get-NetIPConfiguration -ErrorAction SilentlyContinue |
-    Select-Object InterfaceAlias, IPv4Address, IPv6Address
+ForEach-Object {
+    [PSCustomObject]@{
+        InterfaceAlias = $_.InterfaceAlias
+        IPv4Address = ($_.IPv4Address |
+            ForEach-Object { $_.IPAddress }) -join ", "
+
+        IPv6Address = ($_.IPv6Address |
+            ForEach-Object { $_.IPAddress }) -join ", "
+    }
+}
 
 $internetReachable = (Test-NetConnection google.com -WarningAction SilentlyContinue).PingSucceeded
 
@@ -81,30 +119,75 @@ $internetReachable = (Test-NetConnection google.com -WarningAction SilentlyConti
 # USERS & ADMINISTRATORS
 # ================================
 $localUsers = Get-LocalUser -ErrorAction SilentlyContinue |
-    Select-Object Name, Enabled, LastLogon
-$localAdmins = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
-    Select-Object Name, ObjectClass
+ForEach-Object {
+    [PSCustomObject]@{
+        Name      = $_.Name
+        Enabled   = $_.Enabled
+        LastLogon = if ($_.LastLogon) {
+            $_.LastLogon.ToString("yyyy-MM-dd HH:mm:ss")
+        }
+        else {
+            $null
+        }
+    }
+}
+$localAdmins = Get-LocalGroupMember -Group Administrators -ErrorAction SilentlyContinue |
+ForEach-Object {
+    [PSCustomObject]@{
+        Name        = $_.Name
+        ObjectClass = $_.ObjectClass.ToString()
+    }
+}
 
 # ================================
 # SOFTWARE (Installed applications)
 # ================================
-$software = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,
-                           HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue |
-    Where-Object { $_.DisplayName } |
-    Select-Object DisplayName, DisplayVersion, Publisher, InstallDate -First 200
+$software = Get-ItemProperty `
+    HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, `
+    HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* `
+    -ErrorAction SilentlyContinue |
+Where-Object { $_.DisplayName } |
+Select-Object -First 200 |
+ForEach-Object {
+    [PSCustomObject]@{
+        DisplayName    = $_.DisplayName
+        DisplayVersion = $_.DisplayVersion
+        Publisher      = $_.Publisher
+        InstallDate    = $_.InstallDate
+    }
+}
 
 # ================================
 # STARTUP COMMANDS
 # ================================
 $startup = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue |
-    Select-Object Name, Command, Location, User
+ForEach-Object {
+    [PSCustomObject]@{
+        Name     = $_.Name
+        Command  = $_.Command
+        Location = $_.Location
+        User     = $_.User
+    }
+}
 
 # ================================
 # WINDOWS UPDATES (last 20 hotfixes)
 # ================================
 $hotfix = Get-HotFix -ErrorAction SilentlyContinue |
-    Sort-Object InstalledOn -Descending |
-    Select-Object -First 20
+Sort-Object InstalledOn -Descending |
+Select-Object -First 20 |
+ForEach-Object {
+    [PSCustomObject]@{
+        HotFixID    = $_.HotFixID
+        Description = $_.Description
+        InstalledOn = if ($_.InstalledOn) {
+            $_.InstalledOn.ToString("yyyy-MM-dd")
+        }
+        else {
+            $null
+        }
+    }
+}
 
 # ================================
 # MONITORS (WMI)
@@ -121,13 +204,39 @@ $monitors = foreach ($m in $monitorsRaw) {
 # ================================
 # PROCESSES (Top CPU & Memory)
 # ================================
-$topCPU = Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, CPU, Id, WorkingSet
-$topMemory = Get-Process | Sort-Object WorkingSet -Descending | Select-Object -First 10 Name, WorkingSet, Id
+$topCPU = Get-Process |
+Sort-Object CPU -Descending |
+Select-Object -First 10 |
+ForEach-Object {
+    [PSCustomObject]@{
+        Name         = $_.Name
+        CPUSeconds   = [math]::Round($_.CPU, 2)
+        Id           = $_.Id
+        WorkingSetMB = [math]::Round($_.WorkingSet64 / 1MB, 2)
+    }
+}
+$topMemory = Get-Process |
+Sort-Object WorkingSet -Descending |
+Select-Object -First 10 |
+ForEach-Object {
+    [PSCustomObject]@{
+        Name = $_.Name
+        Id = $_.Id
+        WorkingSetMB = [math]::Round($_.WorkingSet64 / 1MB,2)
+    }
+}
 
 # ================================
 # SERVICES (All + failed critical)
 # ================================
-$allServices = Get-Service | Select-Object Name, Status, StartType
+$allServices = Get-Service |
+ForEach-Object {
+    [PSCustomObject]@{
+        Name = $_.Name
+        Status = $_.Status.ToString()
+        StartType = $_.StartType.ToString()
+    }
+}
 
 $knownSafeServices = @(
     'dmwappushservice', 'edgeupdate', 'edgeupdatem', 'GoogleUpdaterInternalService*', 'GoogleUpdaterService*',
@@ -149,14 +258,26 @@ $ignoredServices = $failedServicesRaw | Where-Object { $_.Name -like '*edgeupdat
 $lastDay = (Get-Date).AddDays(-1)
 $criticalEvents = Get-WinEvent -LogName System -MaxEvents 200 -ErrorAction SilentlyContinue |
     Where-Object { $_.LevelDisplayName -in @('Critical', 'Error') -and $_.TimeCreated -gt $lastDay } |
-    Select-Object TimeCreated, Id, ProviderName, Message
+    ForEach-Object {
+    [PSCustomObject]@{
+        TimeCreated = $_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
+        Id = $_.Id
+        ProviderName = $_.ProviderName
+        Message = $_.Message
+    }
+}
 $criticalEventCount = ($criticalEvents | Measure-Object).Count
 
 # ================================
 # SCHEDULED TASKS (sample)
 # ================================
-$scheduledTasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
-    Select-Object TaskName, State
+$scheduledTasks = Get-ScheduledTask |
+ForEach-Object {
+    [PSCustomObject]@{
+        TaskName = $_.TaskName
+        State = $_.State.ToString()
+    }
+}
 
 # ================================
 # STORAGE HEALTH (for scoring - ignore system partitions)
@@ -232,22 +353,46 @@ $report = [PSCustomObject]@{
     Startup          = $startup
     Updates          = $hotfix
     Monitors         = $monitors
-    Processes        = @{
+    Processes        = [PSCustomObject]@{
         TopCPU      = $topCPU
         TopMemory   = $topMemory
     }
     Services         = $allServices
-    FailedCriticalServices = $failedCritical
+    FailedCriticalServices = @($failedCritical)
     CriticalEvents   = $criticalEvents
     ScheduledTasks   = $scheduledTasks
     Summary          = $summary
 }
 
 # ================================
-# EXPORT TO JSON
+# EXPORT & SEND TO KIOTAOPS
 # ================================
-$report | ConvertTo-Json -Depth 6 | Out-File -Encoding UTF8 $Path
 
-Write-Host "`nAudit & Health Engine complete!"
+# Change this to your KiotaOps server
+$ServerUrl = "http://localhost:5000/api/device/report"
+
+# Convert report to JSON
+$json = $report | ConvertTo-Json -Depth 8
+
+# Optional: keep a local copy for troubleshooting
+$json | Out-File -Encoding UTF8 $Path
+
+try {
+    Invoke-RestMethod `
+        -Uri $ServerUrl `
+        -Method POST `
+        -Body $json `
+        -ContentType "application/json"
+
+    Write-Host ""
+    Write-Host "Audit uploaded successfully to KiotaOps." -ForegroundColor Green
+}
+catch {
+    Write-Host ""
+    Write-Host "Failed to upload report to KiotaOps." -ForegroundColor Red
+    Write-Host $_.Exception.Message
+}
+
+Write-Host ""
 Write-Host "Health score: $score / 100"
-Write-Host "File saved to: $Path"
+Write-Host "Local copy: $Path"
