@@ -365,10 +365,10 @@ $report = [PSCustomObject]@{
 }
 
 # ================================
-# EXPORT & SEND TO KIOTAOPS
+# EXPORT & SEND TO SERVER
 # ================================
 
-# Change this to your KiotaOps server
+# Change this to your server
 $ServerUrl = "http://localhost:5000/api/device/report"
 
 # Convert report to JSON
